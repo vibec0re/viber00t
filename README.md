@@ -38,7 +38,7 @@ congrats you're now coding inside a container like it's 2099 🎉
 ```toml
 [project]
 name = "my-chaos-engine"
-agent = "claude-code"  # or whatever ai overlord you worship
+agent = "claude"       # or whatever ai overlord you worship
 privileged = true      # docker-in-podman bc recursion is fun
 
 [[install]]
