@@ -1,0 +1,10 @@
+
+[project]
+name = "c0nt1n3d"
+agent = "claude"
+privileged = true
+
+[[install]]
+envs = ["go"]
+
+
