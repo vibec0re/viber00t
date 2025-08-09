@@ -46,7 +46,7 @@ type GlobalConfig struct {
 
 var envTemplates = map[string][]string{
 	"python": {"python3", "python3-dev", "python3-pip", "python3-venv", "pipx", "poetry", "pyenv", "python3-setuptools"},
-	"rust":   {"rustc", "cargo", "rustfmt", "rust-src", "pkg-config", "libssl-dev"},
+	"rust":   {"pkg-config", "libssl-dev", "build-essential"}, // Core deps for Rust, rustup will be installed separately
 	"node":   {"nodejs", "npm", "yarn", "n"},
 	"go":     {"golang", "gopls"},
 	"ruby":   {"ruby-full", "ruby-dev", "bundler", "rbenv"},
@@ -302,62 +302,142 @@ func getProjectImageName(config *Config) string {
 	return fmt.Sprintf("viber00t/%s:%s", config.Project.Name, hash)
 }
 
-func generateDockerfile(config *Config, globalConfig *GlobalConfig) string {
-	// Separate base packages from project-specific ones
-	var basePackages []string
-	var projectPackages []string
+func buildOrGetBaseImage(env string, globalConfig *GlobalConfig) (string, error) {
+	baseImageName := fmt.Sprintf("viber00t:%s-base", env)
+	
+	// Check if base image already exists
+	checkCmd := exec.Command("podman", "images", "-q", baseImageName)
+	output, _ := checkCmd.Output()
+	if len(output) > 0 {
+		return baseImageName, nil
+	}
 
-	// Always add minimal required packages to base
+	fmt.Printf("\033[35m◉\033[0m Building base image: %s\n", baseImageName)
+
+	// Generate base image Dockerfile
+	dockerfile := generateBaseDockerfile(env, globalConfig)
+	
+	// Create temp build directory
+	buildDir := filepath.Join(getXDGCacheHome(), "viber00t", "base-images", env)
+	if err := os.MkdirAll(buildDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create build directory: %w", err)
+	}
+
+	// Write Dockerfile
+	dockerfilePath := filepath.Join(buildDir, "Dockerfile")
+	if err := ioutil.WriteFile(dockerfilePath, []byte(dockerfile), 0644); err != nil {
+		return "", fmt.Errorf("failed to write Dockerfile: %w", err)
+	}
+
+	// Build base image
+	cmd := exec.Command("podman", "build", "-t", baseImageName, buildDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to build base image %s: %w", baseImageName, err)
+	}
+
+	return baseImageName, nil
+}
+
+func generateBaseDockerfile(env string, globalConfig *GlobalConfig) string {
+	// Base packages
+	var basePackages []string
 	basePackages = append(basePackages, "curl", "wget", "sudo", "ca-certificates", "gnupg", "lsb-release", "git", "vim", "nano", "htop", "less", "man-db")
 
-	// Add base packages from global config
 	if len(globalConfig.BasePackages) > 0 {
 		basePackages = append(basePackages, globalConfig.BasePackages...)
 	}
 
-	// Add global default packages to project layer
-	if len(globalConfig.DefaultPackages) > 0 {
-		projectPackages = append(projectPackages, globalConfig.DefaultPackages...)
-	}
+	dockerfile := `FROM ubuntu:latest
 
-	// Add project-specific packages
-	if len(config.Install) > 0 {
-		if len(config.Install[0].Packages) > 0 {
-			projectPackages = append(projectPackages, config.Install[0].Packages...)
-		}
-
-		// Expand environment templates
-		for _, env := range config.Install[0].Envs {
-			if packages, ok := envTemplates[env]; ok {
-				projectPackages = append(projectPackages, packages...)
-			}
-		}
-
-		// Add global default envs
-		for _, env := range globalConfig.DefaultEnvs {
-			if packages, ok := envTemplates[env]; ok {
-				projectPackages = append(projectPackages, packages...)
-			}
-		}
-	}
-
-	// Build multi-stage Dockerfile
-	dockerfile := `FROM ubuntu:latest AS base
-
-# Set non-interactive frontend
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install base packages (cached layer)
+# Install base packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ` + strings.Join(basePackages, " \\\n    ") + ` && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code (cached layer)
+# Install Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash
-
-FROM base AS final
 `
+
+	// Add environment-specific installations
+	switch env {
+	case "rust":
+		dockerfile += `
+# Install Rust dependencies and rustup
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && \
+    . /root/.cargo/env && \
+    rustup component add rustfmt clippy rust-analyzer rust-src && \
+    cargo install cargo-watch cargo-edit cargo-expand
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV RUST_BACKTRACE=1
+`
+	case "python":
+		dockerfile += `
+# Install Python environment
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python3 python3-dev python3-pip python3-venv pipx poetry pyenv python3-setuptools && \
+    rm -rf /var/lib/apt/lists/*
+`
+	case "node":
+		dockerfile += `
+# Install Node environment
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    nodejs npm yarn && \
+    npm install -g n && \
+    rm -rf /var/lib/apt/lists/*
+`
+	case "go":
+		dockerfile += `
+# Install Go environment
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    golang gopls && \
+    rm -rf /var/lib/apt/lists/*
+`
+	case "base":
+		// Just base packages, no additional environment
+	}
+
+	dockerfile += `
+ENV PATH="/root/.local/bin:${PATH}"
+WORKDIR /c0de/project
+CMD ["claude"]
+`
+
+	return dockerfile
+}
+
+func generateDockerfile(config *Config, globalConfig *GlobalConfig, baseImage string) string {
+	var projectPackages []string
+
+	// Add global default packages
+	if len(globalConfig.DefaultPackages) > 0 {
+		projectPackages = append(projectPackages, globalConfig.DefaultPackages...)
+	}
+
+	// Add project-specific packages
+	if len(config.Install) > 0 && len(config.Install[0].Packages) > 0 {
+		projectPackages = append(projectPackages, config.Install[0].Packages...)
+	}
+
+	// Simple Dockerfile that inherits from the appropriate base
+	dockerfile := fmt.Sprintf(`FROM %s
+
+ENV DEBIAN_FRONTEND=noninteractive
+`, baseImage)
 
 	// Only add project packages if there are any
 	if len(projectPackages) > 0 {
@@ -372,10 +452,8 @@ RUN apt-get update && \
 
 	// Add final configuration
 	dockerfile += `
-# Setup environment
-ENV PATH="/root/.local/bin:${PATH}"
+# Project environment setup
 WORKDIR /c0de/project
-
 CMD ["claude"]
 `
 
@@ -419,6 +497,19 @@ func buildProjectImage(config *Config) error {
 		return nil
 	}
 
+	// Determine which base image to use
+	baseEnv := "base" // Default to base if no env specified
+	if len(config.Install) > 0 && len(config.Install[0].Envs) > 0 {
+		// Use first environment as primary (can extend later for multi-env)
+		baseEnv = config.Install[0].Envs[0]
+	}
+
+	// Build or get the base image
+	baseImage, err := buildOrGetBaseImage(baseEnv, globalConfig)
+	if err != nil {
+		return fmt.Errorf("failed to build/get base image: %w", err)
+	}
+
 	// Clean up any existing containers using this image
 	fmt.Printf("\033[33m⟳\033[0m Cleaning up existing containers...\n")
 	exec.Command("podman", "ps", "-a", "--filter", fmt.Sprintf("ancestor=%s", imageName), "--format", "{{.Names}}", "|", "xargs", "-r", "podman", "rm", "-f").Run()
@@ -426,10 +517,10 @@ func buildProjectImage(config *Config) error {
 	// Remove the old image before building new one
 	exec.Command("podman", "rmi", "-f", imageName).Run()
 
-	fmt.Printf("\033[35m◉\033[0m Building project image: %s\n", imageName)
+	fmt.Printf("\033[35m◉\033[0m Building project image: %s (from %s)\n", imageName, baseImage)
 
 	// Generate Dockerfile from configs
-	dockerfile := generateDockerfile(config, globalConfig)
+	dockerfile := generateDockerfile(config, globalConfig, baseImage)
 
 	// Create temp build directory
 	buildDir := filepath.Join(getXDGCacheHome(), "viber00t", "builds", config.Project.Name)
@@ -721,33 +812,41 @@ func runShell() {
 }
 
 func cleanImages() {
-	fmt.Println("\033[35m◉\033[0m Cleaning viber00t images and cache...")
+	// Load config to get project name
+	config, err := loadConfig()
+	if err != nil {
+		fmt.Println("\033[31m✗\033[0m No viber00t.toml found. Run 'viber00t init' first.")
+		os.Exit(1)
+	}
 
-	// Remove all viber00t images
-	cmd := exec.Command("podman", "images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", "reference=viber00t/*")
+	fmt.Printf("\033[35m◉\033[0m Cleaning images for project: \033[36m%s\033[0m\n", config.Project.Name)
+
+	// Remove only current project's images
+	projectPattern := fmt.Sprintf("viber00t/%s", config.Project.Name)
+	cmd := exec.Command("podman", "images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", fmt.Sprintf("reference=%s*", projectPattern))
 	output, _ := cmd.Output()
 
 	images := strings.Split(strings.TrimSpace(string(output)), "\n")
 	for _, img := range images {
-		if img != "" {
+		if img != "" && strings.HasPrefix(img, projectPattern) {
 			fmt.Printf("\033[33m⟳\033[0m Removing image: %s\n", img)
 			exec.Command("podman", "rmi", img).Run()
 		}
 	}
 
-	// Clean cache directory
-	cacheDir := filepath.Join(getXDGCacheHome(), "viber00t")
-	if err := os.RemoveAll(cacheDir); err != nil {
-		fmt.Printf("\033[33m⚠\033[0m  Failed to clean cache: %v\n", err)
+	// Clean only this project's cache directory
+	projectCacheDir := filepath.Join(getXDGCacheHome(), "viber00t", "builds", config.Project.Name)
+	if err := os.RemoveAll(projectCacheDir); err != nil {
+		fmt.Printf("\033[33m⚠\033[0m  Failed to clean project cache: %v\n", err)
 	}
 
-	// Clean state directory
-	stateDir := filepath.Join(getXDGStateHome(), "viber00t")
-	if err := os.RemoveAll(stateDir); err != nil {
-		fmt.Printf("\033[33m⚠\033[0m  Failed to clean state: %v\n", err)
+	// Clean only this project's state file
+	stateFile := filepath.Join(getXDGStateHome(), "viber00t", "images", config.Project.Name+".state")
+	if err := os.Remove(stateFile); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("\033[33m⚠\033[0m  Failed to clean project state: %v\n", err)
 	}
 
-	fmt.Println("\033[32m✓\033[0m Cleanup complete!")
+	fmt.Println("\033[32m✓\033[0m Project cleanup complete!")
 }
 
 func expandPath(path string) string {
