@@ -1,0 +1,16 @@
+[project]
+name = "viber00t"
+agent = "claude"
+privileged = false
+
+[[install]]
+packages = []
+envs = ["go"]  # Available: python, rust, node, go, ruby, java, cpp, php, dotnet
+
+[[volumes]]
+# source = "~/extra"
+# target = "/c0de/extra"
+
+[[ports]]
+# host = 3000
+# container = 3000
