@@ -158,7 +158,7 @@ func showHelp() {
 	fmt.Println()
 	fmt.Println("\033[33mUSAGE:\033[0m")
 	fmt.Println("  viber00t              \033[90m# Run container (default)\033[0m")
-	fmt.Println("  viber00t init         \033[90m# Create viber00t.toml\033[0m")
+	fmt.Println("  viber00t init         \033[90m# Create Viber00t.toml\033[0m")
 	fmt.Println("  viber00t shell        \033[90m# Interactive bash shell\033[0m")
 	fmt.Println("  viber00t clean        \033[90m# Clean cached images\033[0m")
 	fmt.Println()
@@ -177,16 +177,16 @@ func initConfig() {
 	// Initialize global config first
 	initGlobalConfig()
 
-	if _, err := os.Stat("viber00t.toml"); err == nil {
-		fmt.Println("\033[33m⚠\033[0m  viber00t.toml already exists")
+	if _, err := os.Stat("Viber00t.toml"); err == nil {
+		fmt.Println("\033[33m⚠\033[0m  Viber00t.toml already exists")
 		return
 	}
 
-	err := ioutil.WriteFile("viber00t.toml", []byte(defaultConfig), 0644)
+	err := ioutil.WriteFile("Viber00t.toml", []byte(defaultConfig), 0644)
 	if err != nil {
 		log.Fatal("\033[31m✗\033[0m Failed to create config:", err)
 	}
-	fmt.Println("\033[32m✓\033[0m Created viber00t.toml")
+	fmt.Println("\033[32m✓\033[0m Created Viber00t.toml")
 }
 
 func initGlobalConfig() {
@@ -247,7 +247,7 @@ func loadConfig() (*Config, error) {
 	// Load global config for defaults
 	globalConfig, _ := loadGlobalConfig()
 
-	data, err := ioutil.ReadFile("viber00t.toml")
+	data, err := ioutil.ReadFile("Viber00t.toml")
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +290,7 @@ func getConfigHash(config *Config) string {
 	}
 
 	// Also hash the config file modification time
-	if info, err := os.Stat("viber00t.toml"); err == nil {
+	if info, err := os.Stat("Viber00t.toml"); err == nil {
 		h.Write([]byte(fmt.Sprintf("%d", info.ModTime().Unix())))
 	}
 
@@ -558,7 +558,7 @@ func buildProjectImage(config *Config) error {
 func runContainer() {
 	config, err := loadConfig()
 	if err != nil {
-		fmt.Println("\033[31m✗\033[0m No viber00t.toml found. Run 'viber00t init' first.")
+		fmt.Println("\033[31m✗\033[0m No Viber00t.toml found. Run 'viber00t init' first.")
 		os.Exit(1)
 	}
 
@@ -704,7 +704,7 @@ func runContainer() {
 func runShell() {
 	config, err := loadConfig()
 	if err != nil {
-		fmt.Println("\033[31m✗\033[0m No viber00t.toml found. Run 'viber00t init' first.")
+		fmt.Println("\033[31m✗\033[0m No Viber00t.toml found. Run 'viber00t init' first.")
 		os.Exit(1)
 	}
 
@@ -815,7 +815,7 @@ func cleanImages() {
 	// Load config to get project name
 	config, err := loadConfig()
 	if err != nil {
-		fmt.Println("\033[31m✗\033[0m No viber00t.toml found. Run 'viber00t init' first.")
+		fmt.Println("\033[31m✗\033[0m No Viber00t.toml found. Run 'viber00t init' first.")
 		os.Exit(1)
 	}
 
