@@ -12,7 +12,7 @@ go build -o viber00t
 ### Run
 ```bash
 ./viber00t         # Run container (default)
-./viber00t init    # Create viber00t.toml  
+./viber00t init    # Create Viber00t.toml  
 ./viber00t clean   # Clean cached images
 ```
 
@@ -28,7 +28,7 @@ viber00t is a containerized development environment tool built in Go that uses P
 ### Core Components
 
 1. **Configuration System** (`main.go:17-103`)
-   - Project config via `viber00t.toml` 
+   - Project config via `Viber00t.toml` 
    - Global config at `~/.config/viber00t/config.toml`
    - Environment templates for language-specific packages
    - Config hashing for image caching
@@ -56,7 +56,7 @@ viber00t is a containerized development environment tool built in Go that uses P
 ### Configuration Flow
 
 1. Global config provides defaults and base packages
-2. Project config (`viber00t.toml`) specifies project-specific needs
+2. Project config (`Viber00t.toml`) specifies project-specific needs
 3. Config hash determines if rebuild is needed
 4. Dockerfile generated dynamically from merged configs
 5. Images cached and reused based on config hash

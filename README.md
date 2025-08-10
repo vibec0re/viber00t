@@ -33,7 +33,7 @@ congrats you're now coding inside a container like it's 2099 🎉
 
 ## config (optional, for control freaks)
 
-`viber00t.toml` if you must:
+`Viber00t.toml` if you must:
 
 ```toml
 [project]
@@ -83,7 +83,7 @@ chaos > order
 
 ```bash
 ./viber00t         # enter the matrix (run container)
-./viber00t init    # create config (optional)
+./viber00t init    # create Viber00t.toml (optional)
 ./viber00t clean   # nuke cached images
 ```
 
