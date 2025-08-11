@@ -125,8 +125,20 @@ func getXDGStateHome() string {
 
 func main() {
 	if len(os.Args) < 2 {
-		runContainer()
+		runContainer([]string{})
 		return
+	}
+
+	// Check for help/version flags anywhere in args
+	for _, arg := range os.Args[1:] {
+		if arg == "help" || arg == "-h" || arg == "--help" {
+			showHelp()
+			return
+		}
+		if arg == "version" || arg == "-v" || arg == "--version" {
+			showVersion()
+			return
+		}
 	}
 
 	switch os.Args[1] {
@@ -136,12 +148,9 @@ func main() {
 		cleanImages()
 	case "shell":
 		runShell()
-	case "help", "-h", "--help":
-		showHelp()
-	case "version", "-v", "--version":
-		showVersion()
 	default:
-		runContainer()
+		// Pass all arguments through to claude
+		runContainer(os.Args[1:])
 	}
 }
 
@@ -555,7 +564,7 @@ func buildProjectImage(config *Config) error {
 	return nil
 }
 
-func runContainer() {
+func runContainer(extraArgs []string) {
 	config, err := loadConfig()
 	if err != nil {
 		fmt.Println("\033[31m✗\033[0m No Viber00t.toml found. Run 'viber00t init' first.")
@@ -683,6 +692,11 @@ func runContainer() {
 		// Add claude specific flags
 		if config.Project.Agent == "claude" && len(globalConfig.ClaudeFlags) > 0 {
 			agentCmd = append(agentCmd, globalConfig.ClaudeFlags...)
+		}
+
+		// Add any extra arguments passed through from the command line
+		if len(extraArgs) > 0 {
+			agentCmd = append(agentCmd, extraArgs...)
 		}
 
 		args = append(args, agentCmd...)
