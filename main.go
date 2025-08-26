@@ -56,6 +56,41 @@ var envTemplates = map[string][]string{
 	"dotnet": {"dotnet-sdk-8.0", "nuget"},
 }
 
+// Default base packages for all containers (built into code, not config)
+var defaultBasePackages = []string{
+	// Version control & build
+	"git", "git-lfs", "build-essential", "make", "cmake", "gcc", "g++",
+
+	// Editors & terminal tools
+	"vim", "nano", "emacs", "htop", "tmux", "tree", "ncdu", "ranger", "mc",
+
+	// Dev essentials
+	"jq", "yq", "ripgrep", "fd-find", "fzf", "bat", "eza", "duf", "tldr",
+	"python3", "python3-pip", "python3-venv",
+
+	// Network & monitoring
+	"curl", "wget", "httpie", "netcat-openbsd", "iputils-ping", "net-tools",
+	"dnsutils", "traceroute", "nmap", "tcpdump", "iftop", "iotop", "sysstat",
+
+	// Archives & compression
+	"zip", "unzip", "tar", "xz-utils", "p7zip-full", "bzip2", "gzip",
+
+	// Container & DB tools
+	"docker.io", "docker-compose",
+	"postgresql-client", "redis-tools", "sqlite3", "mysql-client",
+
+	// System utils
+	"sudo", "file", "less", "man-db", "locales", "ca-certificates",
+	"software-properties-common", "apt-transport-https", "gnupg", "lsb-release",
+	"openssh-client", "rsync", "screen", "strace", "ltrace", "gdb",
+
+	// Text processing
+	"sed", "gawk", "grep", "diffutils", "patch", "dos2unix",
+
+	// Shell enhancements
+	"zsh", "fish", "bash-completion", "command-not-found",
+}
+
 const defaultConfig = `[project]
 name = "my-project"
 agent = "claude"
@@ -76,30 +111,25 @@ envs = []  # Available: python, rust, node, go, ruby, java, cpp, php, dotnet
 
 const defaultGlobalConfig = `# viber00t global configuration
 # ~/.config/viber00t/config.toml
+# This file contains OVERRIDES only - defaults are built into viber00t
 
-default_agent = "claude"
-default_privileged = false
-default_image = "viber00t/base:latest"
+# Override default agent (default: "claude")
+# default_agent = "claude"
 
-# Flags passed to claude
-claude_flags = ["--dangerously-skip-permissions"]
+# Override privileged mode (default: false)
+# default_privileged = false
 
-# Base packages installed in every container
-base_packages = [
-  "git", "git-lfs", "build-essential", "make",
-  "vim", "nano", "htop", "tmux", "tree", "ncdu",
-  "jq", "ripgrep", "fd-find", "fzf", "bat",
-  "httpie", "netcat-openbsd", "iputils-ping",
-  "zip", "unzip", "tar", "xz-utils",
-  "docker.io", "docker-compose",
-  "postgresql-client", "redis-tools", "sqlite3"
-]
+# Override flags passed to claude
+# claude_flags = ["--dangerously-skip-permissions"]
+
+# Additional packages to install in every container (added to defaults)
+# base_packages = ["package1", "package2"]
 
 # Default environments for all projects
-default_envs = []
+# default_envs = ["python", "rust"]
 
 # Default packages for all projects
-default_packages = []
+# default_packages = []
 `
 
 func getXDGConfigHome() string {
@@ -145,7 +175,12 @@ func main() {
 	case "init":
 		initConfig()
 	case "clean":
-		cleanImages()
+		// Check for --all flag
+		cleanAll := false
+		if len(os.Args) > 2 && (os.Args[2] == "--all" || os.Args[2] == "-a") {
+			cleanAll = true
+		}
+		cleanImages(cleanAll)
 	case "shell":
 		runShell()
 	default:
@@ -169,7 +204,8 @@ func showHelp() {
 	fmt.Println("  viber00t              \033[90m# Run container (default)\033[0m")
 	fmt.Println("  viber00t init         \033[90m# Create Viber00t.toml\033[0m")
 	fmt.Println("  viber00t shell        \033[90m# Interactive bash shell\033[0m")
-	fmt.Println("  viber00t clean        \033[90m# Clean cached images\033[0m")
+	fmt.Println("  viber00t clean        \033[90m# Clean project images\033[0m")
+	fmt.Println("  viber00t clean --all  \033[90m# Clean ALL images (including base)\033[0m")
 	fmt.Println()
 	fmt.Println("\033[33mENVIRONMENTS:\033[0m")
 	fmt.Println("  python, rust, node, go, ruby, java, cpp, php, dotnet")
@@ -227,24 +263,37 @@ func loadGlobalConfig() (*GlobalConfig, error) {
 	// Initialize if not exists
 	initGlobalConfig()
 
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return nil, err
-	}
+	// Start with built-in defaults
+	config.DefaultAgent = "claude"
+	config.DefaultImage = "viber00t/base:latest"
+	config.ClaudeFlags = []string{"--dangerously-skip-permissions"}
+	config.BasePackages = defaultBasePackages // Use defaults from code
 
-	if _, err := toml.Decode(string(data), &config); err != nil {
-		return nil, err
-	}
-
-	// Set defaults if not specified
-	if config.DefaultAgent == "" {
-		config.DefaultAgent = "claude"
-	}
-	if config.DefaultImage == "" {
-		config.DefaultImage = "viber00t/base:latest"
-	}
-	if len(config.ClaudeFlags) == 0 {
-		config.ClaudeFlags = []string{"--dangerously-skip-permissions"}
+	// Load config file if it exists and merge overrides
+	if data, err := ioutil.ReadFile(configPath); err == nil {
+		var fileConfig GlobalConfig
+		if _, err := toml.Decode(string(data), &fileConfig); err == nil {
+			// Override defaults with config file values if set
+			if fileConfig.DefaultAgent != "" {
+				config.DefaultAgent = fileConfig.DefaultAgent
+			}
+			if fileConfig.DefaultImage != "" {
+				config.DefaultImage = fileConfig.DefaultImage
+			}
+			if fileConfig.DefaultPrivileged {
+				config.DefaultPrivileged = fileConfig.DefaultPrivileged
+			}
+			if len(fileConfig.ClaudeFlags) > 0 {
+				config.ClaudeFlags = fileConfig.ClaudeFlags
+			}
+			// Append additional packages from config to defaults
+			if len(fileConfig.BasePackages) > 0 {
+				config.BasePackages = append(config.BasePackages, fileConfig.BasePackages...)
+			}
+			// Copy over other fields
+			config.DefaultEnvs = fileConfig.DefaultEnvs
+			config.DefaultPackages = fileConfig.DefaultPackages
+		}
 	}
 
 	return &config, nil
@@ -313,7 +362,7 @@ func getProjectImageName(config *Config) string {
 
 func buildOrGetBaseImage(env string, globalConfig *GlobalConfig) (string, error) {
 	baseImageName := fmt.Sprintf("viber00t:%s-base", env)
-	
+
 	// Check if base image already exists
 	checkCmd := exec.Command("podman", "images", "-q", baseImageName)
 	output, _ := checkCmd.Output()
@@ -325,7 +374,7 @@ func buildOrGetBaseImage(env string, globalConfig *GlobalConfig) (string, error)
 
 	// Generate base image Dockerfile
 	dockerfile := generateBaseDockerfile(env, globalConfig)
-	
+
 	// Create temp build directory
 	buildDir := filepath.Join(getXDGCacheHome(), "viber00t", "base-images", env)
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
@@ -351,13 +400,8 @@ func buildOrGetBaseImage(env string, globalConfig *GlobalConfig) (string, error)
 }
 
 func generateBaseDockerfile(env string, globalConfig *GlobalConfig) string {
-	// Base packages
-	var basePackages []string
-	basePackages = append(basePackages, "curl", "wget", "sudo", "ca-certificates", "gnupg", "lsb-release", "git", "vim", "nano", "htop", "less", "man-db")
-
-	if len(globalConfig.BasePackages) > 0 {
-		basePackages = append(basePackages, globalConfig.BasePackages...)
-	}
+	// Use base packages from global config (which includes defaults + overrides)
+	basePackages := globalConfig.BasePackages
 
 	dockerfile := `FROM ubuntu:latest
 
@@ -367,7 +411,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ` + strings.Join(basePackages, " \\\n    ") + ` && \
-    rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash
@@ -380,11 +423,9 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # Install Rust dependencies and rustup
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev build-essential && \
-    rm -rf /var/lib/apt/lists/*
+    pkg-config libssl-dev build-essential
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && \
-    . /root/.cargo/env && \
     rustup component add rustfmt clippy rust-analyzer rust-src && \
     cargo install cargo-watch cargo-edit cargo-expand
 
@@ -397,7 +438,6 @@ ENV RUST_BACKTRACE=1
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 python3-dev python3-pip python3-venv pipx poetry pyenv python3-setuptools && \
-    rm -rf /var/lib/apt/lists/*
 `
 	case "node":
 		dockerfile += `
@@ -406,7 +446,6 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     nodejs npm yarn && \
     npm install -g n && \
-    rm -rf /var/lib/apt/lists/*
 `
 	case "go":
 		dockerfile += `
@@ -414,7 +453,6 @@ RUN apt-get update && \
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     golang gopls && \
-    rm -rf /var/lib/apt/lists/*
 `
 	case "base":
 		// Just base packages, no additional environment
@@ -422,7 +460,7 @@ RUN apt-get update && \
 
 	dockerfile += `
 ENV PATH="/root/.local/bin:${PATH}"
-WORKDIR /c0de/project
+WORKDIR /c0de
 CMD ["claude"]
 `
 
@@ -454,15 +492,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install project-specific packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    ` + strings.Join(projectPackages, " \\\n    ") + ` && \
-    rm -rf /var/lib/apt/lists/*
-`
+    ` + strings.Join(projectPackages, " \\\n    ")
 	}
 
 	// Add final configuration
 	dockerfile += `
-# Project environment setup
-WORKDIR /c0de/project
+# Setup environment
+ENV PATH="/root/.local/bin:${PATH}"
+WORKDIR /c0de
+
+# Create entrypoint to cd to project directory
+RUN echo '#!/bin/bash\ncd /c0de/${VIBER00T_PROJECT:-project}\nexec "$@"' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["claude"]
 `
 
@@ -592,7 +635,7 @@ func runContainer(extraArgs []string) {
 		"--name", containerName,
 		"--hostname", "viber00t",
 		"--userns=keep-id:uid=0,gid=0",
-		"-v", fmt.Sprintf("%s:/c0de/project", cwd),
+		"-v", fmt.Sprintf("%s:/c0de/%s", cwd, config.Project.Name),
 	}
 
 	// Mount Claude config directory if it exists
@@ -743,7 +786,7 @@ func runShell() {
 		"--name", containerName,
 		"--hostname", "viber00t",
 		"--userns=keep-id:uid=0,gid=0",
-		"-v", fmt.Sprintf("%s:/c0de/project", cwd),
+		"-v", fmt.Sprintf("%s:/c0de/%s", cwd, config.Project.Name),
 	}
 
 	// Mount Claude config directory if it exists
@@ -825,42 +868,74 @@ func runShell() {
 	}
 }
 
-func cleanImages() {
-	// Load config to get project name
-	config, err := loadConfig()
-	if err != nil {
-		fmt.Println("\033[31m✗\033[0m No Viber00t.toml found. Run 'viber00t init' first.")
-		os.Exit(1)
-	}
+func cleanImages(cleanAll bool) {
+	if cleanAll {
+		// Clean ALL viber00t images including base images
+		fmt.Println("\033[35m◉\033[0m Cleaning ALL viber00t images (including base images)...")
 
-	fmt.Printf("\033[35m◉\033[0m Cleaning images for project: \033[36m%s\033[0m\n", config.Project.Name)
+		// Remove all viber00t images
+		cmd := exec.Command("podman", "images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", "reference=viber00t*")
+		output, _ := cmd.Output()
 
-	// Remove only current project's images
-	projectPattern := fmt.Sprintf("viber00t/%s", config.Project.Name)
-	cmd := exec.Command("podman", "images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", fmt.Sprintf("reference=%s*", projectPattern))
-	output, _ := cmd.Output()
-
-	images := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, img := range images {
-		if img != "" && strings.HasPrefix(img, projectPattern) {
-			fmt.Printf("\033[33m⟳\033[0m Removing image: %s\n", img)
-			exec.Command("podman", "rmi", img).Run()
+		images := strings.Split(strings.TrimSpace(string(output)), "\n")
+		for _, img := range images {
+			if img != "" && strings.Contains(img, "viber00t") {
+				fmt.Printf("\033[33m⟳\033[0m Removing image: %s\n", img)
+				exec.Command("podman", "rmi", "-f", img).Run()
+			}
 		}
-	}
 
-	// Clean only this project's cache directory
-	projectCacheDir := filepath.Join(getXDGCacheHome(), "viber00t", "builds", config.Project.Name)
-	if err := os.RemoveAll(projectCacheDir); err != nil {
-		fmt.Printf("\033[33m⚠\033[0m  Failed to clean project cache: %v\n", err)
-	}
+		// Clean entire viber00t cache
+		viber00tCacheDir := filepath.Join(getXDGCacheHome(), "viber00t")
+		if err := os.RemoveAll(viber00tCacheDir); err != nil {
+			fmt.Printf("\033[33m⚠\033[0m  Failed to clean cache: %v\n", err)
+		}
 
-	// Clean only this project's state file
-	stateFile := filepath.Join(getXDGStateHome(), "viber00t", "images", config.Project.Name+".state")
-	if err := os.Remove(stateFile); err != nil && !os.IsNotExist(err) {
-		fmt.Printf("\033[33m⚠\033[0m  Failed to clean project state: %v\n", err)
-	}
+		// Clean all state files
+		stateDir := filepath.Join(getXDGStateHome(), "viber00t", "images")
+		if err := os.RemoveAll(stateDir); err != nil {
+			fmt.Printf("\033[33m⚠\033[0m  Failed to clean state: %v\n", err)
+		}
 
-	fmt.Println("\033[32m✓\033[0m Project cleanup complete!")
+		fmt.Println("\033[32m✓\033[0m All viber00t images and cache cleaned!")
+	} else {
+		// Load config to get project name
+		config, err := loadConfig()
+		if err != nil {
+			fmt.Println("\033[31m✗\033[0m No Viber00t.toml found. Run 'viber00t init' first.")
+			os.Exit(1)
+		}
+
+		fmt.Printf("\033[35m◉\033[0m Cleaning images for project: \033[36m%s\033[0m\n", config.Project.Name)
+
+		// Remove only current project's images
+		projectPattern := fmt.Sprintf("viber00t/%s", config.Project.Name)
+		cmd := exec.Command("podman", "images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", fmt.Sprintf("reference=%s*", projectPattern))
+		output, _ := cmd.Output()
+
+		images := strings.Split(strings.TrimSpace(string(output)), "\n")
+		for _, img := range images {
+			if img != "" && strings.HasPrefix(img, projectPattern) {
+				fmt.Printf("\033[33m⟳\033[0m Removing image: %s\n", img)
+				exec.Command("podman", "rmi", img).Run()
+			}
+		}
+
+		// Clean only this project's cache directory
+		projectCacheDir := filepath.Join(getXDGCacheHome(), "viber00t", "builds", config.Project.Name)
+		if err := os.RemoveAll(projectCacheDir); err != nil {
+			fmt.Printf("\033[33m⚠\033[0m  Failed to clean project cache: %v\n", err)
+		}
+
+		// Clean only this project's state file
+		stateFile := filepath.Join(getXDGStateHome(), "viber00t", "images", config.Project.Name+".state")
+		if err := os.Remove(stateFile); err != nil && !os.IsNotExist(err) {
+			fmt.Printf("\033[33m⚠\033[0m  Failed to clean project state: %v\n", err)
+		}
+
+		fmt.Println("\033[32m✓\033[0m Project cleanup complete!")
+		fmt.Println("\033[90mTip: Use 'viber00t clean --all' to also clean base images\033[0m")
+	}
 }
 
 func expandPath(path string) string {
